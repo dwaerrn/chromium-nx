@@ -4814,12 +4814,23 @@ static int guest_argc;
 /*
  * Extensions from the card: each folder of sdmc:/switch/chromium-nx/Extensions
  * that has a manifest.json is an unpacked extension (uBlock Origin Lite's
- * release zip, unzipped there), loaded with --load-extension. The guest sees
- * the card at /root/SD, read only (mount_home()), which an unpacked extension
- * does not mind. The Web Store's "Add to Chrome" stays greyed out here.
+ * release zip, unzipped there), loaded with --load-extension. The Web Store's
+ * "Add to Chrome" stays greyed out here.
+ *
+ * Not from the card itself (/root/SD in the guest): Chromium refused uBlock
+ * Origin Lite there ("Default locale is defined but default data couldn't be
+ * loaded"), having read _locales/en/messages.json but not found en when it
+ * listed _locales. Each is copied to the profile's disk, an ext4 one, at
+ * /root/gx-extensions/<folder> (copy_extensions()), again only when what is
+ * on the card has changed; check_card_listing() logs what the guest's view of
+ * the card gave, to find out why.
  */
 #define EXTENSIONS_DIR "sdmc:/switch/chromium-nx/Extensions"
-#define EXTENSIONS_GUEST "/root/SD/switch/chromium-nx/Extensions"
+#define EXTENSIONS_CARD "/root/SD/switch/chromium-nx/Extensions"
+#define EXTENSIONS_COPY "/root/gx-extensions"
+#define MAX_EXTENSIONS 16
+static char extension_names[MAX_EXTENSIONS][256];
+static int extension_count;
 
 static void load_extensions(void)
 {
@@ -4870,9 +4881,11 @@ static void load_extensions(void)
 				closedir(ld);
 			host_log("gx: Extensions/%s/_locales on the card:%s\n", e->d_name, names);
 		}
-		if (n + 1 + sizeof(EXTENSIONS_GUEST) + len + 1 > sizeof(arg))
+		if (extension_count == MAX_EXTENSIONS || len >= sizeof(extension_names[0]) ||
+		    n + 1 + sizeof(EXTENSIONS_COPY) + len + 1 > sizeof(arg))
 			break;
-		n += snprintf(arg + n, sizeof(arg) - n, "%s" EXTENSIONS_GUEST "/%s",
+		strcpy(extension_names[extension_count++], e->d_name);
+		n += snprintf(arg + n, sizeof(arg) - n, "%s" EXTENSIONS_COPY "/%s",
 			      n > start ? "," : "", e->d_name);
 		host_log("gx: extension from the card: Extensions/%s\n", e->d_name);
 	}
@@ -4880,6 +4893,207 @@ static void load_extensions(void)
 		closedir(d);
 	if (n > start)
 		guest_argv[guest_argc++] = arg;
+}
+
+/* What getdents64 hands out, as in the kernel's include/linux/dirent.h. */
+struct gx_dirent64 {
+	uint64_t d_ino;
+	int64_t d_off;
+	unsigned short d_reclen;
+	unsigned char d_type;
+	char d_name[];
+};
+
+/* Calls fn for each name in a directory of the guest's (not . nor ..). */
+static int lkl_each_entry(const char *dir, void (*fn)(const char *dir, const char *name,
+						      unsigned type, void *arg), void *arg)
+{
+	static char buf[16384];
+	long params[6] = { 0 };
+	int fd = lkl_sys_open(dir, LKL_O_RDONLY, 0);
+	long got;
+
+	if (fd < 0)
+		return fd;
+	for (;;) {
+		params[0] = fd;
+		params[1] = (long)buf;
+		params[2] = sizeof(buf);
+		got = lkl_syscall(__lkl__NR_getdents64, params);
+		if (got <= 0)
+			break;
+		for (long at = 0; at < got;) {
+			struct gx_dirent64 *e = (struct gx_dirent64 *)(buf + at);
+
+			at += e->d_reclen;
+			if (strcmp(e->d_name, ".") && strcmp(e->d_name, ".."))
+				fn(dir, e->d_name, e->d_type, arg);
+		}
+	}
+	lkl_sys_close(fd);
+	return got < 0 ? (int)got : 0;
+}
+
+static void remove_entry(const char *dir, const char *name, unsigned type, void *arg);
+
+/* A directory of the guest's and all in it. */
+static void remove_tree(const char *path)
+{
+	long params[6] = { LKL_AT_FDCWD, (long)path, 0x200 /* AT_REMOVEDIR */ };
+
+	lkl_each_entry(path, remove_entry, NULL);
+	lkl_syscall(__lkl__NR_unlinkat, params);
+}
+
+static void remove_entry(const char *dir, const char *name, unsigned type, void *arg)
+{
+	char path[1024];
+
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	if (type == 4 /* DT_DIR */)
+		remove_tree(path);
+	else
+		lkl_sys_unlink(path);
+}
+
+/* The card's folder, walked: a line for each file (its name, size and date),
+ * which says whether the copy is still the same; with to, each is copied
+ * there. Returns the number of files, -1 when one could not be copied. */
+static long walk_extension(const char *from, const char *to, char *stamp, size_t room, size_t rel)
+{
+	static unsigned char buf[256 << 10];
+	struct dirent *e;
+	long files = 0;
+	DIR *d = opendir(from);
+
+	if (!d)
+		return -1;
+	if (to)
+		lkl_sys_mkdir(to, 0755);
+	while ((e = readdir(d))) {
+		char src[1024], dst[1024];
+		struct stat st;
+
+		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+			continue;
+		snprintf(src, sizeof(src), "%s/%s", from, e->d_name);
+		if (to)
+			snprintf(dst, sizeof(dst), "%s/%s", to, e->d_name);
+		if (stat(src, &st))
+			continue;
+		if (S_ISDIR(st.st_mode)) {
+			long sub = walk_extension(src, to ? dst : NULL, stamp, room, rel);
+
+			if (sub < 0) {
+				files = -1;
+				break;
+			}
+			files += sub;
+			continue;
+		}
+		if (stamp && strlen(stamp) + strlen(src) + 48 < room)
+			snprintf(stamp + strlen(stamp), room - strlen(stamp), "%s %lld %lld\n",
+				 src + rel, (long long)st.st_size, (long long)st.st_mtime);
+		files++;
+		if (to) {
+			FILE *in = fopen(src, "rb");
+			int fd = lkl_sys_open(dst, LKL_O_WRONLY | LKL_O_CREAT | LKL_O_TRUNC, 0644);
+			size_t got;
+			int ok = in && fd >= 0;
+
+			while (ok && (got = fread(buf, 1, sizeof(buf), in)) > 0)
+				ok = lkl_sys_write(fd, (char *)buf, got) == (long)got;
+			if (in)
+				fclose(in);
+			if (fd >= 0)
+				lkl_sys_close(fd);
+			if (!ok) {
+				host_log("gx: could not copy %s (is the profile full?)\n", src);
+				files = -1;
+				break;
+			}
+		}
+	}
+	closedir(d);
+	return files;
+}
+
+static void count_entry(const char *dir, const char *name, unsigned type, void *arg)
+{
+	long *counts = arg;
+	char path[1024];
+	struct lkl_stat st;
+	int err;
+
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	counts[0]++;
+	err = lkl_sys_stat(path, &st);
+	if (!err && (st.st_mode & LKL_S_IFMT) == LKL_S_IFDIR)
+		counts[1]++;
+	else if (counts[2]++ < 3)
+		host_log("gx:   %s: stat %d, mode %#o, type %u\n", name, err, err ? 0 : (unsigned)st.st_mode, type);
+	if (!strcmp(name, "en"))
+		counts[3] = 1;
+}
+
+/* What Chromium found wrong on the card, as the guest sees it: _locales
+ * listed (getdents64) and each name in it looked at (stat), as Chromium's
+ * FileEnumerator does. For the log only. */
+static void check_card_listing(const char *name)
+{
+	char path[1024];
+	long counts[4] = { 0 };
+	int err;
+
+	snprintf(path, sizeof(path), EXTENSIONS_CARD "/%s/_locales", name);
+	err = lkl_each_entry(path, count_entry, counts);
+	host_log("gx: the guest lists Extensions/%s/_locales on the card: %ld names, %ld folders, "
+		 "en %s, end %d\n", name, counts[0], counts[1], counts[3] ? "listed" : "not listed", err);
+}
+
+static void copy_extensions(void)
+{
+	static char stamp[64 << 10], old[64 << 10];
+
+	if (extension_count)
+		lkl_sys_mkdir(EXTENSIONS_COPY, 0755);
+	for (int i = 0; i < extension_count; i++) {
+		char from[512], to[512], stamp_path[512];
+		long files;
+		int fd, same = 0;
+
+		check_card_listing(extension_names[i]);
+		snprintf(from, sizeof(from), EXTENSIONS_DIR "/%s", extension_names[i]);
+		snprintf(to, sizeof(to), EXTENSIONS_COPY "/%s", extension_names[i]);
+		snprintf(stamp_path, sizeof(stamp_path), EXTENSIONS_COPY "/%s.gx-stamp", extension_names[i]);
+		stamp[0] = 0;
+		if (walk_extension(from, NULL, stamp, sizeof(stamp), strlen(from)) < 0)
+			continue;
+		fd = lkl_sys_open(stamp_path, LKL_O_RDONLY, 0);
+		if (fd >= 0) {
+			long n = lkl_sys_read(fd, old, sizeof(old) - 1);
+
+			old[n > 0 ? n : 0] = 0;
+			lkl_sys_close(fd);
+			same = !strcmp(old, stamp);
+		}
+		if (same)
+			continue;
+		host_log("gx: copying Extensions/%s to the profile (once, a moment)\n", extension_names[i]);
+		lkl_sys_unlink(stamp_path);
+		remove_tree(to);
+		files = walk_extension(from, to, NULL, 0, 0);
+		if (files < 0) {
+			remove_tree(to);
+			continue;
+		}
+		fd = lkl_sys_open(stamp_path, LKL_O_WRONLY | LKL_O_CREAT | LKL_O_TRUNC, 0644);
+		if (fd >= 0) {
+			lkl_sys_write(fd, stamp, strlen(stamp));
+			lkl_sys_close(fd);
+		}
+		host_log("gx: %ld files copied\n", files);
+	}
 }
 
 static void read_commands(void)
@@ -5243,6 +5457,7 @@ static void run(void *arg)
 	}
 	if (profile_mounted)
 		unlock_profile();
+	copy_extensions();
 	if (wayland)
 		system_title_bar();
 	if (cpu_count)
