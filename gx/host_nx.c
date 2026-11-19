@@ -89,10 +89,6 @@
 	"--test-type --password-store=basic --disable-background-networking --disable-component-update " \
 	"--disk-cache-size=33554432 --media-cache-size=33554432 --disable-quic --hide-crash-restore-bubble " \
 	"--enable-spatial-navigation --remote-debugging-pipe --disable-blink-features=AutomationControlled " \
-	/* Debian's chromium installs extensions from the Web Store only with \
-	   this (its /usr/bin/chromium wrapper adds it, which gx does not run); \
-	   without it, "Add to Chrome" is greyed out. */ \
-	"--enable-remote-extensions " \
 	/* One renderer for every site: in a single process Chromium stops \
 	   (GetProcessHostForSiteInstance) when a site wants one of its own, \
 	   as a download from "Save link as" did. */ \
