@@ -4843,6 +4843,15 @@ static void load_extensions(void)
 			host_log("gx: Extensions/%s has no manifest.json: not an extension\n", e->d_name);
 			continue;
 		}
+		/* A folder of the card with the archive bit set is a file to
+		 * Horizon (its form of a file over 4 GB): a Mac copying, and some
+		 * unzippers, leave it so. Chromium then finds _locales, a file,
+		 * and nothing in it ("Default locale is defined but default data
+		 * couldn't be loaded"). */
+		snprintf(manifest, sizeof(manifest), EXTENSIONS_DIR "/%s/_locales", e->d_name);
+		if (!stat(manifest, &st) && !S_ISDIR(st.st_mode))
+			host_log("gx: Extensions/%s/_locales is a file to the console: its folders have "
+				 "the archive bit (Hekate: Tools, Arch bit, Fix archive bit)\n", e->d_name);
 		if (n + 1 + sizeof(EXTENSIONS_GUEST) + len + 1 > sizeof(arg))
 			break;
 		n += snprintf(arg + n, sizeof(arg) - n, "%s" EXTENSIONS_GUEST "/%s",
