@@ -149,6 +149,20 @@ if it fails. To watch it, in a second terminal:
 docker exec lkl-gx tail -f /tmp/lkl-build.log
 ```
 
+**Do not press Ctrl+C and start it again:** Ctrl+C stops only your terminal,
+the build goes on inside the container, and two builds in the same kernel tree
+break each other (errors such as `fixdep: error opening file`, or
+`redefinition of` / `has no member named` in files that are fine). If that
+happened, stop everything and start clean:
+
+```bash
+docker restart lkl-gx
+```
+
+```bash
+docker exec lkl-gx make -C /work/linux ARCH=lkl mrproper
+```
+
 It is done when it prints a line listing `tools/lkl/liblkl.a`. `build-nx.sh`
 works the same way for its kernel (step 7); its log is `/work/gx-nx/kernel.log`.
 
