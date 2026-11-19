@@ -4811,6 +4811,50 @@ static int command_count;
 static char *guest_argv[MAX_ARGS + 1];
 static int guest_argc;
 
+/*
+ * Extensions from the card: each folder of sdmc:/switch/chromium-nx/Extensions
+ * that has a manifest.json is an unpacked extension (uBlock Origin Lite's
+ * release zip, unzipped there), loaded with --load-extension. The guest sees
+ * the card at /root/SD, read only (mount_home()), which an unpacked extension
+ * does not mind. The Web Store's "Add to Chrome" stays greyed out here.
+ */
+#define EXTENSIONS_DIR "sdmc:/switch/chromium-nx/Extensions"
+#define EXTENSIONS_GUEST "/root/SD/switch/chromium-nx/Extensions"
+
+static void load_extensions(void)
+{
+	static char arg[4096];
+	size_t n = snprintf(arg, sizeof(arg), "--load-extension=");
+	const size_t start = n;
+	struct dirent *e;
+	DIR *d;
+
+	mkdir(EXTENSIONS_DIR, 0777);
+	d = opendir(EXTENSIONS_DIR);
+	while (d && (e = readdir(d))) {
+		char manifest[1024];
+		struct stat st;
+		size_t len = strlen(e->d_name);
+
+		if (e->d_name[0] == '.' || strchr(e->d_name, ','))   /* ',' separates them */
+			continue;
+		snprintf(manifest, sizeof(manifest), EXTENSIONS_DIR "/%s/manifest.json", e->d_name);
+		if (stat(manifest, &st) || !S_ISREG(st.st_mode)) {
+			host_log("gx: Extensions/%s has no manifest.json: not an extension\n", e->d_name);
+			continue;
+		}
+		if (n + 1 + sizeof(EXTENSIONS_GUEST) + len + 1 > sizeof(arg))
+			break;
+		n += snprintf(arg + n, sizeof(arg) - n, "%s" EXTENSIONS_GUEST "/%s",
+			      n > start ? "," : "", e->d_name);
+		host_log("gx: extension from the card: Extensions/%s\n", e->d_name);
+	}
+	if (d)
+		closedir(d);
+	if (n > start)
+		guest_argv[guest_argc++] = arg;
+}
+
 static void read_commands(void)
 {
 	FILE *f = fopen(GX_DIR "/launch.txt", "r");
@@ -5721,6 +5765,8 @@ int main(int argc, char **argv)
 		if (theme == ColorSetId_Dark)
 			guest_argv[guest_argc++] = "--force-dark-mode";
 	}
+	if (browser && guest_argc < MAX_ARGS)
+		load_extensions();
 	/* On a TV (the console in its dock), 1080p: the screen is made
 	 * 1920 x 1080 (gl_screen()) and Chromium is told to draw at one and a
 	 * half times (wl.c, wp_fractional_scale_v1), so that pages are laid out
