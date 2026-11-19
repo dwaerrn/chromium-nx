@@ -27,10 +27,14 @@ CHROMIUM=/usr/lib/chromium/chromium-headless-shell
 # What the whole browser is started with, here and on the console: one process,
 # no helper of its own to report crashes (it would be a process), its profile
 # in /root, and a cache that stays small since the files are in memory.
+# --enable-remote-extensions: Debian's chromium installs extensions from the
+# Web Store only with it ("Add to Chrome" is greyed out otherwise); Debian's
+# /usr/bin/chromium wrapper adds it, and the binary is started here without it.
 FULL_FLAGS="--no-sandbox --single-process --no-zygote --ozone-platform=wayland --user-data-dir=/root/profile \
 --no-first-run --no-default-browser-check --disable-breakpad --disable-crashpad-for-testing --test-type \
 --password-store=basic --disable-background-networking --disable-component-update \
---disk-cache-size=33554432 --media-cache-size=33554432 --disable-quic --hide-crash-restore-bubble --enable-spatial-navigation --remote-debugging-pipe"
+--disk-cache-size=33554432 --media-cache-size=33554432 --disable-quic --hide-crash-restore-bubble --enable-spatial-navigation --remote-debugging-pipe \
+--enable-remote-extensions"
 # Where its address bar is, for gx (-A).
 FULL_ADDRESS=225,46,1150,80
 
