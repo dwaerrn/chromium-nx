@@ -141,6 +141,17 @@ packages than the image has; only what the console needs is made.
 docker exec lkl-gx bash /project/gx/build-lkl.sh
 ```
 
+This one prints **nothing** while it works (10 to 40 minutes; hours on Apple
+Silicon): the compiler's output goes to a log inside the container, shown only
+if it fails. To watch it, in a second terminal:
+
+```bash
+docker exec lkl-gx tail -f /tmp/lkl-build.log
+```
+
+It is done when it prints a line listing `tools/lkl/liblkl.a`. `build-nx.sh`
+works the same way for its kernel (step 7); its log is `/work/gx-nx/kernel.log`.
+
 ```bash
 docker exec -e NO_TESTS=1 lkl-gx bash /project/gx/build-pc.sh
 ```
