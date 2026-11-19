@@ -502,6 +502,35 @@ static int hfs_open(char *in, int r, int w, int append)
 	return fd;
 }
 
+/*
+ * A name of 8.3 in small letters ("en", "_locales") that Windows wrote is kept
+ * on the card as its capitals with a flag saying "small", which Horizon does
+ * not read: it lists "EN". Opening "en" finds it all the same (the card
+ * ignores case), but what compares a listed name with its own does not:
+ * Chromium refused an unpacked extension ("Default locale is defined but
+ * default data couldn't be loaded") whose _locales listed EN, not en. In the
+ * extensions' folder only, a name in capitals that fits 8.3 is listed in small
+ * letters: there files are only opened by name. Elsewhere capitals are a
+ * program's own (LevelDB's CURRENT, LOG) and are left alone.
+ */
+#define EXTENSIONS_PATH "/switch/chromium-nx/Extensions"
+
+static void small_letters(const char *dir, char *name)
+{
+	const char *dot = strchr(name, '.');
+	size_t len = strlen(name), base = dot ? (size_t)(dot - name) : len;
+
+	if (!under(dir, EXTENSIONS_PATH) || !base || base > 8 ||
+	    (dot && (strchr(dot + 1, '.') || len - base - 1 > 3)))
+		return;
+	for (const char *p = name; *p; p++)
+		if (*p >= 'a' && *p <= 'z')
+			return;
+	for (char *p = name; *p; p++)
+		if (*p >= 'A' && *p <= 'Z')
+			*p += 32;
+}
+
 struct dir {
 	char path[PATH_LEN];
 	int count, at;
@@ -550,6 +579,7 @@ static void *hfs_open_dir(char *in, int *err_out)
 			snprintf(full, sizeof(full), "%s/%s", strcmp(d->path, "/") ? d->path : "",
 				 batch[i].name);
 			strcpy(d->entries[d->count].name, batch[i].name);
+			small_letters(d->path, d->entries[d->count].name);
 			d->entries[d->count].type = batch[i].type == FsDirEntryType_Dir ? L_DT_DIR :
 						    link_at(full) ? L_DT_LNK : L_DT_REG;
 			d->count++;

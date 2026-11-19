@@ -4849,9 +4849,27 @@ static void load_extensions(void)
 		 * and nothing in it ("Default locale is defined but default data
 		 * couldn't be loaded"). */
 		snprintf(manifest, sizeof(manifest), EXTENSIONS_DIR "/%s/_locales", e->d_name);
-		if (!stat(manifest, &st) && !S_ISDIR(st.st_mode))
+		int has_locales = !stat(manifest, &st);
+
+		if (has_locales && !S_ISDIR(st.st_mode))
 			host_log("gx: Extensions/%s/_locales is a file to the console: its folders have "
 				 "the archive bit (Hekate: Tools, Arch bit, Fix archive bit)\n", e->d_name);
+		else if (has_locales) {
+			/* What the card lists in _locales, for the log: names in
+			 * capitals are listed to the guest in small letters
+			 * (hostfs_nx.c, small_letters()). */
+			char names[256] = "";
+			DIR *ld = opendir(manifest);
+			struct dirent *le;
+
+			while (ld && (le = readdir(ld)) && strlen(names) < 200) {
+				strcat(names, " ");
+				strncat(names, le->d_name, 40);
+			}
+			if (ld)
+				closedir(ld);
+			host_log("gx: Extensions/%s/_locales on the card:%s\n", e->d_name, names);
+		}
 		if (n + 1 + sizeof(EXTENSIONS_GUEST) + len + 1 > sizeof(arg))
 			break;
 		n += snprintf(arg + n, sizeof(arg) - n, "%s" EXTENSIONS_GUEST "/%s",
