@@ -356,6 +356,21 @@ static void handle_window_message(const char *message)
 				snprintf(params, sizeof(params), "{\"expression\":\"%s\"}", script);
 				send_command(id, "Runtime.evaluate", params);
 			}
+			/* An extension's own (its service worker, its popup): what
+			 * goes wrong in it is written to the log, there being no
+			 * developer tools to see it in. Sites do not see this. */
+			if (strstr(message, "\"url\":\"chrome-extension://")) {
+				char type[32] = "", url[160] = "";
+				const char *info = strstr(message, "\"targetInfo\":");
+
+				if (info) {
+					string_value(info, "type", type, sizeof(type));
+					string_value(info, "url", url, sizeof(url));
+				}
+				host_log("gx: extension: %s %s\n", type, url);
+				send_command(id, "Runtime.enable", "{}");
+				send_command(id, "Log.enable", "{}");
+			}
 			send_command(id, "Runtime.runIfWaitingForDebugger", "{}");
 			return;
 		}
@@ -404,6 +419,22 @@ static void handle_window_message(const char *message)
 				start_url[0] = 0;
 			}
 		}
+	} else if (strstr(message, "\"method\":\"Runtime.exceptionThrown\"")) {
+		/* Only extensions' have Runtime enabled (above): pages do not,
+		 * sites that look for a robot can tell. */
+		const char *details = strstr(message, "\"exceptionDetails\":");
+
+		host_log("gx: extension: exception: %.600s\n", details ? details + 19 : message);
+	} else if (strstr(message, "\"method\":\"Runtime.consoleAPICalled\"") &&
+		   (strstr(message, "\"type\":\"error\"") || strstr(message, "\"type\":\"warning\""))) {
+		const char *args = strstr(message, "\"args\":");
+
+		host_log("gx: extension: console: %.400s\n", args ? args + 7 : message);
+	} else if (strstr(message, "\"method\":\"Log.entryAdded\"") &&
+		   (strstr(message, "\"level\":\"error\"") || strstr(message, "\"level\":\"warning\""))) {
+		const char *entry = strstr(message, "\"entry\":");
+
+		host_log("gx: extension: log: %.500s\n", entry ? entry + 8 : message);
 	} else if (strstr(message, "\"method\":\"Target.detachedFromTarget\"")) {
 		if (string_value(message, "sessionId", id, sizeof(id)) <= 0)
 			return;
