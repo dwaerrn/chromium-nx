@@ -59,13 +59,16 @@ static const char page_script[] =
 	/* What is added to the page does not show: names that are not
 	 * enumerated, and functions put in place of the browser's own that say
 	 * they are its own when asked (Function.prototype.toString). Sites that
-	 * look for a robot (YouTube) look for such things. */
+	 * look for a robot (YouTube) look for such things. They are methods
+	 * (mk()), like the browser's: no prototype, and new on one throws, where
+	 * a function(){} had one and could be made with new or extended, which
+	 * checks such as Cloudflare's look for too. */
 	"(function(){if(window.__gx)return;"
 	"Object.defineProperty(window,'__gx',{value:1});"
 	"var nat=new WeakMap(),fts=Function.prototype.toString;"
-	"function hide(w,g){nat.set(w,g);try{Object.defineProperty(w,'name',{value:g.name});"
-	"Object.defineProperty(w,'length',{value:g.length})}catch(e){}return w}"
-	"Function.prototype.toString=hide(function toString(){return fts.call(nat.get(this)||this)},fts);"
+	"function mk(g,f){var w=({[g.name](...a){return f.call(this,a)}})[g.name];nat.set(w,g);"
+	"try{Object.defineProperty(w,'length',{value:g.length})}catch(e){}return w}"
+	"Function.prototype.toString=mk(fts,function(){return fts.call(nat.get(this)||this)});"
 	"function ed(e){if(!e)return false;if(e.isContentEditable)return true;"
 	"if(e.readOnly||e.disabled)return false;if(e.tagName=='TEXTAREA')return true;"
 	"if(e.tagName!='INPUT')return false;"
@@ -83,15 +86,15 @@ static const char page_script[] =
 	 * Switch 2's screen is 1080 high, the Switch's 720. */
 	"var tallest=" VIDEO_MAX_HEIGHT ";"
 	"function tall(t){var m=/height=(\\d+)/.exec(t);return m&&+m[1]>tallest}"
-	"function not(o,f){var g=o&&o[f];if(g)o[f]=hide(function(t){return no.test(t)||tall(t)?"
-	"(f=='canPlayType'?'':false):g.apply(this,arguments)},g)}"
+	"function not(o,f){var g=o&&o[f];if(g)o[f]=mk(g,function(a){var t=a[0];return no.test(t)||tall(t)?"
+	"(f=='canPlayType'?'':false):g.apply(this,a)})}"
 	"not(window.MediaSource,'isTypeSupported');not(window.ManagedMediaSource,'isTypeSupported');"
 	"not(HTMLMediaElement.prototype,'canPlayType');"
 	"var mc=navigator.mediaCapabilities,di=mc&&mc.decodingInfo;"
-	"if(di)mc.decodingInfo=hide(function(c){var v=c&&c.video;"
+	"if(di)mc.decodingInfo=mk(di,function(a){var c=a[0],v=c&&c.video;"
 	"if(v&&(no.test(v.contentType)||v.height>tallest))"
 	"return Promise.resolve({supported:false,smooth:false,powerEfficient:false});"
-	"return di.apply(this,arguments)},di)"
+	"return di.apply(this,a)})"
 	"})()";
 /* The same refusals in a page's workers: a player can make its MediaSource
  * there (YouTube does, on its desktop site), where the page's own script does
@@ -100,19 +103,19 @@ static const char page_script[] =
 static const char worker_script[] =
 	"(function(){if(self.__gx)return;self.__gx=1;"
 	"var nat=new WeakMap(),fts=Function.prototype.toString;"
-	"function hide(w,g){nat.set(w,g);try{Object.defineProperty(w,'name',{value:g.name});"
-	"Object.defineProperty(w,'length',{value:g.length})}catch(e){}return w}"
-	"Function.prototype.toString=hide(function toString(){return fts.call(nat.get(this)||this)},fts);"
+	"function mk(g,f){var w=({[g.name](...a){return f.call(this,a)}})[g.name];nat.set(w,g);"
+	"try{Object.defineProperty(w,'length',{value:g.length})}catch(e){}return w}"
+	"Function.prototype.toString=mk(fts,function(){return fts.call(nat.get(this)||this)});"
 	"var no=/vp8|vp9|vp09|av01/i,tallest=" VIDEO_MAX_HEIGHT ";"
 	"function tall(t){var m=/height=(\\d+)/.exec(t);return m&&+m[1]>tallest}"
-	"function not(o,f){var g=o&&o[f];if(g)o[f]=hide(function(t){return no.test(t)||tall(t)?false:"
-	"g.apply(this,arguments)},g)}"
+	"function not(o,f){var g=o&&o[f];if(g)o[f]=mk(g,function(a){var t=a[0];return no.test(t)||tall(t)?false:"
+	"g.apply(this,a)})}"
 	"not(self.MediaSource,'isTypeSupported');not(self.ManagedMediaSource,'isTypeSupported');"
 	"var mc=self.navigator&&navigator.mediaCapabilities,di=mc&&mc.decodingInfo;"
-	"if(di)mc.decodingInfo=hide(function(c){var v=c&&c.video;"
+	"if(di)mc.decodingInfo=mk(di,function(a){var c=a[0],v=c&&c.video;"
 	"if(v&&(no.test(v.contentType)||v.height>tallest))"
 	"return Promise.resolve({supported:false,smooth:false,powerEfficient:false});"
-	"return di.apply(this,arguments)},di)"
+	"return di.apply(this,a)})"
 	"})()";
 static char session[128];   /* the page we are attached to, once we are */
 
